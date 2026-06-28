@@ -367,12 +367,12 @@ if run_button:
     clean_frame_box.image(
         render_mountain_car_frame(clean_obs, "Clean robot - start"),
         caption="Clean robot start",
-        use_container_width=True,
+        width="stretch",
     )
     attack_frame_box.image(
         render_mountain_car_frame(attack_obs, "Attacked robot - start"),
         caption="Attacked robot start",
-        use_container_width=True,
+        width="stretch",
     )
 
     clean_total = 0.0
@@ -490,14 +490,14 @@ if run_button:
             clean_frame_box.image(
                 render_mountain_car_frame(clean_display_obs, "Clean robot"),
                 caption=clean_caption,
-                use_container_width=True,
+                width="stretch",
             )
 
         if should_update_attack_panel:
             attack_frame_box.image(
                 render_mountain_car_frame(attack_display_obs, "Attacked robot"),
                 caption=attack_caption,
-                use_container_width=True,
+                width="stretch",
             )
 
         if make_gif and (step == 0 or step % frame_stride == 0 or final_clean_done or final_attack_done or step == max_steps - 1):
@@ -532,19 +532,19 @@ if run_button:
     clean_frame_box.image(
         render_mountain_car_frame(clean_display_obs, "Clean robot - final"),
         caption="Clean robot final state",
-        use_container_width=True,
+        width="stretch",
     )
     attack_frame_box.image(
         render_mountain_car_frame(attack_display_obs, "Attacked robot - final"),
         caption="Attacked robot final state",
-        use_container_width=True,
+        width="stretch",
     )
 
     if make_gif and rollout_frames:
         try:
             gif_duration = max(30, int(delay * 1000)) if delay > 0 else 70
             gif_bytes = frames_to_gif_bytes(rollout_frames, duration_ms=gif_duration)
-            animation_box.image(gif_bytes, caption="Playback animation for Streamlit Cloud", use_container_width=True)
+            animation_box.image(gif_bytes, caption="Playback animation for Streamlit Cloud", width="stretch")
         except Exception as exc:
             animation_box.warning(f"GIF playback could not be created, but the final panels and summary are still available. Details: {exc}")
 
