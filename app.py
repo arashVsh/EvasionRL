@@ -10,6 +10,8 @@ simulation. Detailed timestep logs are intentionally hidden from the user-facing
 from __future__ import annotations
 
 import io
+import base64
+import streamlit.components.v1 as components
 import json
 import math
 import time
@@ -33,20 +35,17 @@ st.set_page_config(page_title="EvasionRL", page_icon="🤖", layout="wide")
 st.title("🤖 EvasionRL")
 st.subheader("Real-Time Observation Evasion Attack")
 
-st.markdown(
-    """
+st.markdown("""
 This demo runs **two copies of the same trained RL robot** from the same initial state.
 
 - **Clean robot:** receives the true environment observation.
 - **Attacked robot:** the environment produces a true observation, but the attacker modifies it before the DQN sees it.
 - The attacker does **not** change the model, reward, or physics.
 - The simulation keeps running until the selected step limit, so you can keep watching the attacked robot even after the clean robot reaches the flag. The app also overrides MountainCar's default 200-step truncation, so the sidebar max-step value is the actual demo limit. A compact explanation appears at the end. The app shows live panels during the run and also creates an optional GIF playback, which is more reliable on Streamlit Cloud.
-"""
-)
+""")
 
 with st.expander("What exactly does the agent see?", expanded=True):
-    st.markdown(
-        """
+    st.markdown("""
 MountainCar gives the agent a 2-value observation:
 
 ```text
@@ -74,14 +73,15 @@ What the DQN sees:    [-0.495,  0.050]
 ```
 
 The robot then executes the action selected from the **modified observation**, but the environment physics still update the real car state.
-"""
-    )
+""")
 
 with st.sidebar:
     st.header("Attack controls")
     run_button = st.button("Run side-by-side demo", type="primary")
     attack = st.selectbox("Attack type", ["none", "random", "fgsm", "pgd"], index=3)
-    epsilon = st.slider("Observation perturbation ε", 0.0, 0.25, 0.050, 0.001, format="%.4f")
+    epsilon = st.slider(
+        "Observation perturbation ε", 0.0, 0.25, 0.050, 0.001, format="%.4f"
+    )
 
     # PGD is an iterative attack, so the step-count control is only relevant
     # when PGD is selected. FGSM is one-step, random noise has no gradient
@@ -102,15 +102,26 @@ with st.sidebar:
         objective = "flip_margin"
 
     max_steps = st.slider("Max demo steps", 50, 1000, 300, 10)
-    st.caption("This overrides MountainCar-v0's default 200-step time limit for the demo.")
+    st.caption(
+        "This overrides MountainCar-v0's default 200-step time limit for the demo."
+    )
     delay = st.slider("Frame delay", 0.00, 0.20, 0.03, 0.005, format="%.3f")
-    live_update_every = st.slider("Live panel update every N steps", 1, 20, 3, 1)
-    make_gif = st.checkbox("Create GIF playback after run", value=True, help="Recommended for Streamlit Cloud because rapid live frame updates may be skipped by the browser.")
+    animation_fps = st.slider("Playback FPS", 5, 30, 12, 1)
+    frame_stride = st.slider(
+        "Capture every N steps",
+        1,
+        10,
+        2,
+        1,
+        help="Higher values make deployment lighter. Lower values make animation smoother.",
+    )
     seed = st.number_input("Episode seed", value=42, min_value=0, step=1)
-    
+
 
 if not MODEL_PATH.exists():
-    st.error(f"Model not found: `{MODEL_PATH}`. Train it first with: `python train_dqn.py --timesteps 500000`")
+    st.error(
+        f"Model not found: `{MODEL_PATH}`. Train it first with: `python train_dqn.py --timesteps 500000`"
+    )
     st.stop()
 
 
@@ -134,7 +145,9 @@ if SUMMARY_PATH.exists():
                 "retrain with: `python train_dqn.py --timesteps 500000` or higher."
             )
         elif mean_reward is not None:
-            st.success(f"Loaded trained DQN. Clean evaluation mean reward ≈ {mean_reward:.1f}.")
+            st.success(
+                f"Loaded trained DQN. Clean evaluation mean reward ≈ {mean_reward:.1f}."
+            )
     except Exception:
         st.info("Training summary found, but it could not be parsed.")
 else:
@@ -161,8 +174,9 @@ def reached_goal(obs: np.ndarray) -> bool:
     return float(obs[0]) >= GOAL_POSITION
 
 
-
-def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640, height: int = 360) -> np.ndarray:
+def render_mountain_car_frame(
+    obs: np.ndarray, title: str = "", width: int = 640, height: int = 360
+) -> np.ndarray:
     """Draw MountainCar without Gymnasium's pygame renderer.
 
     Gymnasium's built-in RGB renderer depends on pygame/SDL, which can fail on
@@ -220,9 +234,15 @@ def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640
     # Goal flag.
     goal_px = x_to_px(goal_x)
     goal_py = y_to_px(hill_y(goal_x))
-    draw.line([(goal_px, goal_py), (goal_px, goal_py - 75)], fill=(30, 120, 60), width=4)
+    draw.line(
+        [(goal_px, goal_py), (goal_px, goal_py - 75)], fill=(30, 120, 60), width=4
+    )
     draw.polygon(
-        [(goal_px, goal_py - 75), (goal_px + 55, goal_py - 60), (goal_px, goal_py - 45)],
+        [
+            (goal_px, goal_py - 75),
+            (goal_px + 55, goal_py - 60),
+            (goal_px, goal_py - 45),
+        ],
         fill=(40, 170, 80),
     )
     draw.text((max(0, goal_px - 30), max(0, goal_py - 100)), "FLAG", fill=(30, 120, 60))
@@ -260,11 +280,19 @@ def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640
     # Velocity arrow.
     if abs(velocity) > 1e-4:
         arrow_len = max(-45, min(45, velocity * 900))
-        draw.line([(car_px, car_py - 45), (car_px + arrow_len, car_py - 45)], fill=(30, 90, 200), width=3)
+        draw.line(
+            [(car_px, car_py - 45), (car_px + arrow_len, car_py - 45)],
+            fill=(30, 90, 200),
+            width=3,
+        )
         head_x = car_px + arrow_len
         sign = 1 if arrow_len >= 0 else -1
         draw.polygon(
-            [(head_x, car_py - 45), (head_x - 8 * sign, car_py - 51), (head_x - 8 * sign, car_py - 39)],
+            [
+                (head_x, car_py - 45),
+                (head_x - 8 * sign, car_py - 51),
+                (head_x - 8 * sign, car_py - 39),
+            ],
             fill=(30, 90, 200),
         )
         draw.text((car_px - 32, car_py - 70), "velocity", fill=(30, 90, 200))
@@ -272,7 +300,9 @@ def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640
     return np.array(img)
 
 
-def make_side_by_side_frame(clean_obs: np.ndarray, attack_obs: np.ndarray, clean_done: bool, attack_done: bool) -> Image.Image:
+def make_side_by_side_frame(
+    clean_obs: np.ndarray, attack_obs: np.ndarray, clean_done: bool, attack_done: bool
+) -> Image.Image:
     """Create one combined frame for the optional animated GIF playback."""
     clean_img = Image.fromarray(
         render_mountain_car_frame(
@@ -292,13 +322,84 @@ def make_side_by_side_frame(clean_obs: np.ndarray, attack_obs: np.ndarray, clean
     )
     gap = 20
     header_h = 42
-    combined = Image.new("RGB", (clean_img.width + attack_img.width + gap, clean_img.height + header_h), "white")
+    combined = Image.new(
+        "RGB",
+        (clean_img.width + attack_img.width + gap, clean_img.height + header_h),
+        "white",
+    )
     draw = ImageDraw.Draw(combined)
     draw.text((16, 12), "EvasionRL side-by-side rollout", fill=(20, 30, 45))
-    draw.text((clean_img.width + gap + 16, 12), "Clean vs attacked robot", fill=(20, 30, 45))
+    draw.text(
+        (clean_img.width + gap + 16, 12), "Clean vs attacked robot", fill=(20, 30, 45)
+    )
     combined.paste(clean_img, (0, header_h))
     combined.paste(attack_img, (clean_img.width + gap, header_h))
     return combined
+
+
+def frame_to_png_data_uri(frame: Image.Image) -> str:
+    """Convert a PIL frame to a browser-displayable PNG data URI."""
+    buf = io.BytesIO()
+    frame.save(buf, format="PNG", optimize=True)
+    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+
+def render_browser_animation(frames: list[Image.Image], fps: int = 12) -> None:
+    """Render animation in the browser instead of repeatedly rerendering Streamlit images."""
+    if not frames:
+        st.warning("No animation frames were captured.")
+        return
+
+    data_uris = [frame_to_png_data_uri(frame) for frame in frames]
+    interval_ms = int(1000 / max(fps, 1))
+
+    html = f"""
+    <div style="width: 100%; text-align: center;">
+        <img id="evasionrl_anim"
+             src="{data_uris[0]}"
+             style="width: 100%; max-width: 1150px; border-radius: 10px; border: 1px solid #ddd;" />
+        <div style="margin-top: 8px; font-family: sans-serif;">
+            <button onclick="togglePlay()" style="padding: 6px 12px;">Play / Pause</button>
+            <button onclick="restartAnim()" style="padding: 6px 12px;">Restart</button>
+            <span id="frame_counter" style="margin-left: 12px;">Frame 1 / {len(data_uris)}</span>
+        </div>
+    </div>
+
+    <script>
+        const frames = {json.dumps(data_uris)};
+        let idx = 0;
+        let playing = true;
+        const img = document.getElementById("evasionrl_anim");
+        const counter = document.getElementById("frame_counter");
+
+        function showFrame(i) {{
+            img.src = frames[i];
+            counter.innerText = "Frame " + (i + 1) + " / " + frames.length;
+        }}
+
+        function stepAnim() {{
+            if (playing) {{
+                idx = (idx + 1) % frames.length;
+                showFrame(idx);
+            }}
+        }}
+
+        function togglePlay() {{
+            playing = !playing;
+        }}
+
+        function restartAnim() {{
+            idx = 0;
+            playing = true;
+            showFrame(idx);
+        }}
+
+        setInterval(stepAnim, {interval_ms});
+    </script>
+    """
+
+    components.html(html, height=430, scrolling=False)
 
 
 def frames_to_gif_bytes(frames: list[Image.Image], duration_ms: int = 80) -> bytes:
@@ -317,7 +418,15 @@ def frames_to_gif_bytes(frames: list[Image.Image], duration_ms: int = 80) -> byt
     )
     return buf.getvalue()
 
-def describe_stop(clean_done: bool, attack_done: bool, clean_obs: np.ndarray, attack_obs: np.ndarray, step_count: int, max_steps: int) -> str:
+
+def describe_stop(
+    clean_done: bool,
+    attack_done: bool,
+    clean_obs: np.ndarray,
+    attack_obs: np.ndarray,
+    step_count: int,
+    max_steps: int,
+) -> str:
     clean_goal = reached_goal(clean_obs)
     attack_goal = reached_goal(attack_obs)
 
@@ -399,7 +508,6 @@ if run_button:
     both_active_steps = 0
 
     rollout_frames: list[Image.Image] = []
-    frame_stride = max(1, int(max_steps // 180))
 
     # Important: do not stop when only one robot reaches the flag.
     # Freeze the finished robot and keep stepping the unfinished robot until max_steps.
@@ -429,7 +537,9 @@ if run_button:
 
             # Correct metric: did the perturbation alter the attacked robot's action relative
             # to what the same attacked robot would have done from its true observation?
-            attack_changed_this_decision = attacked_action_without_attack != attacked_action
+            attack_changed_this_decision = (
+                attacked_action_without_attack != attacked_action
+            )
             if attack_changed_this_decision:
                 attack_decision_changes += 1
                 if first_attack_decision_change is None:
@@ -437,7 +547,12 @@ if run_button:
 
         # Separate metric: did the clean robot's actual action differ from the attacked robot's action?
         # Only compute this while both robots are still active. After one finishes, comparing actions is misleading.
-        if (not final_clean_done) and (not final_attack_done) and clean_action is not None and attacked_action is not None:
+        if (
+            (not final_clean_done)
+            and (not final_attack_done)
+            and clean_action is not None
+            and attacked_action is not None
+        ):
             both_active_steps += 1
             clean_vs_attacked_diff_this_step = clean_action != attacked_action
             if clean_vs_attacked_diff_this_step:
@@ -449,7 +564,9 @@ if run_button:
         attack_stepped_this_loop = False
 
         if not final_clean_done and clean_action is not None:
-            clean_next_obs, clean_reward, clean_terminated, clean_truncated, _ = env_clean.step(clean_action)
+            clean_next_obs, clean_reward, clean_terminated, clean_truncated, _ = (
+                env_clean.step(clean_action)
+            )
             clean_total += float(clean_reward)
             clean_obs = clean_next_obs
             clean_display_obs = clean_obs.copy()
@@ -460,7 +577,9 @@ if run_button:
                 clean_done_step = step + 1
 
         if not final_attack_done and attacked_action is not None:
-            attack_next_obs, attack_reward, attack_terminated, attack_truncated, _ = env_attack.step(attacked_action)
+            attack_next_obs, attack_reward, attack_terminated, attack_truncated, _ = (
+                env_attack.step(attacked_action)
+            )
             attack_total += float(attack_reward)
             attack_obs = attack_next_obs
             attack_display_obs = attack_obs.copy()
@@ -470,45 +589,32 @@ if run_button:
             if final_attack_done and attack_done_step is None:
                 attack_done_step = step + 1
 
-        clean_caption = "Clean robot: finished" if final_clean_done else "Clean robot: DQN sees true [position, velocity]"
-        attack_caption = "Attacked robot: finished" if final_attack_done else "Attacked robot: DQN sees perturbed [position, velocity]"
+        clean_caption = (
+            "Clean robot: finished"
+            if final_clean_done
+            else "Clean robot: DQN sees true [position, velocity]"
+        )
+        attack_caption = (
+            "Attacked robot: finished"
+            if final_attack_done
+            else "Attacked robot: DQN sees perturbed [position, velocity]"
+        )
 
         # Static panels are still updated during the run. On Streamlit Cloud,
         # some rapid updates may be skipped, but the panels remain visible and
         # the optional GIF below provides reliable playback after the run.
-        periodic_update = step == 0 or step % int(live_update_every) == 0 or step == max_steps - 1
-
-        should_update_clean_panel = (
-            periodic_update and not final_clean_done
-        ) or clean_stepped_this_loop or (clean_done_step == step + 1)
-
-        should_update_attack_panel = (
-            periodic_update and not final_attack_done
-        ) or attack_stepped_this_loop or (attack_done_step == step + 1)
-
-        if should_update_clean_panel:
-            clean_frame_box.image(
-                render_mountain_car_frame(clean_display_obs, "Clean robot"),
-                caption=clean_caption,
-                width="stretch",
-            )
-
-        if should_update_attack_panel:
-            attack_frame_box.image(
-                render_mountain_car_frame(attack_display_obs, "Attacked robot"),
-                caption=attack_caption,
-                width="stretch",
-            )
-
-        if make_gif and (step == 0 or step % frame_stride == 0 or final_clean_done or final_attack_done or step == max_steps - 1):
+        # Capture frames for browser-side playback.
+        # This is more reliable on Streamlit Cloud than live st.image updates.
+        if step == 0 or step % int(frame_stride) == 0 or step == max_steps - 1:
             rollout_frames.append(
-            make_side_by_side_frame(
-                clean_display_obs,
-                attack_display_obs,
-                final_clean_done,
-                final_attack_done,
+                make_side_by_side_frame(
+                    clean_display_obs,
+                    attack_display_obs,
+                    final_clean_done,
+                    final_attack_done,
+                )
             )
-        )
+
 
         step_count = step + 1
         if clean_action is not None:
@@ -518,12 +624,13 @@ if run_button:
         if attacked_action_without_attack is not None:
             last_attacked_action_without_attack = attacked_action_without_attack
 
-        progress_bar.progress(min(step_count / max_steps, 1.0), text=f"Running until max-step limit... step {step_count}/{max_steps}")
+        progress_bar.progress(
+            min(step_count / max_steps, 1.0),
+            text=f"Running until max-step limit... step {step_count}/{max_steps}",
+        )
 
         if final_clean_done and final_attack_done:
             break
-
-        time.sleep(delay)
 
     progress_box.empty()
 
@@ -540,13 +647,10 @@ if run_button:
         width="stretch",
     )
 
-    if make_gif and rollout_frames:
-        try:
-            gif_duration = max(30, int(delay * 1000)) if delay > 0 else 70
-            gif_bytes = frames_to_gif_bytes(rollout_frames, duration_ms=gif_duration)
-            animation_box.image(gif_bytes, caption="Playback animation for Streamlit Cloud", width="stretch")
-        except Exception as exc:
-            animation_box.warning(f"GIF playback could not be created, but the final panels and summary are still available. Details: {exc}")
+    if rollout_frames:
+        animation_box.markdown("## Rollout playback")
+        with animation_box.container():
+            render_browser_animation(rollout_frames, fps=int(animation_fps))
 
     if last_result is None:
         st.error("No simulation steps were run.")
@@ -554,15 +658,27 @@ if run_button:
 
     clean_success = reached_goal(clean_obs)
     attack_success = reached_goal(attack_obs)
-    stop_text = describe_stop(final_clean_done, final_attack_done, clean_obs, attack_obs, step_count, max_steps)
+    stop_text = describe_stop(
+        final_clean_done,
+        final_attack_done,
+        clean_obs,
+        attack_obs,
+        step_count,
+        max_steps,
+    )
     attack_decision_change_rate = attack_decision_changes / max(attack_active_steps, 1)
-    clean_vs_attacked_diff_rate = clean_vs_attacked_action_diffs / max(both_active_steps, 1)
+    clean_vs_attacked_diff_rate = clean_vs_attacked_action_diffs / max(
+        both_active_steps, 1
+    )
     perturb_linf = float(np.linalg.norm(last_result.perturbation, ord=np.inf))
 
-    outcome = "Attack disrupted the robot." if clean_success and not attack_success else "Attack did not clearly disrupt success in this run."
+    outcome = (
+        "Attack disrupted the robot."
+        if clean_success and not attack_success
+        else "Attack did not clearly disrupt success in this run."
+    )
 
-    final_box.markdown(
-        f"""
+    final_box.markdown(f"""
 ## Final summary
 
 **Outcome:** {outcome}
@@ -600,7 +716,8 @@ if run_button:
 The demo uses the sidebar max-step value as the actual environment time limit. If one robot reaches the flag early, its view freezes, but the other robot continues until it also reaches the flag or the selected max-step limit is reached.
 
 In MountainCar, the reward is usually `-1` per active environment step until the flag is reached. A shorter successful run can therefore have a less negative return. The important visual result is whether the clean robot reaches the flag while the attacked robot remains far away.
-"""
-    )
+""")
 else:
-    st.info("Choose attack settings in the sidebar, then click **Run side-by-side demo**.")
+    st.info(
+        "Choose attack settings in the sidebar, then click **Run side-by-side demo**."
+    )
