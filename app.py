@@ -78,13 +78,25 @@ with st.sidebar:
     st.header("Attack controls")
     attack = st.selectbox("Attack type", ["none", "random", "fgsm", "pgd"], index=3)
     epsilon = st.slider("Observation perturbation ε", 0.0, 0.25, 0.050, 0.001, format="%.4f")
-    pgd_steps = st.slider("PGD steps", 1, 50, 20)
-    objective = st.selectbox(
-        "Gradient objective",
-        ["flip_margin", "reduce_best_q"],
-        index=0,
-        help="flip_margin encourages a different action; reduce_best_q reduces the current best action value.",
-    )
+
+    # PGD is an iterative attack, so the step-count control is only relevant
+    # when PGD is selected. FGSM is one-step, random noise has no gradient
+    # steps, and the no-attack baseline should keep the sidebar simple.
+    if attack == "pgd":
+        pgd_steps = st.slider("PGD steps", 1, 50, 20)
+    else:
+        pgd_steps = 1
+
+    if attack in {"fgsm", "pgd"}:
+        objective = st.selectbox(
+            "Gradient objective",
+            ["flip_margin", "reduce_best_q"],
+            index=0,
+            help="flip_margin encourages a different action; reduce_best_q reduces the current best action value.",
+        )
+    else:
+        objective = "flip_margin"
+
     max_steps = st.slider("Max demo steps", 50, 1000, 300, 10)
     st.caption("This overrides MountainCar-v0's default 200-step time limit for the demo.")
     delay = st.slider("Frame delay", 0.00, 0.20, 0.03, 0.005, format="%.3f")
