@@ -40,7 +40,7 @@ This demo runs **two copies of the same trained RL robot** from the same initial
 - **Clean robot:** receives the true environment observation.
 - **Attacked robot:** the environment produces a true observation, but the attacker modifies it before the DQN sees it.
 - The attacker does **not** change the model, reward, or physics.
-- The simulation keeps running until the selected step limit, so you can keep watching the attacked robot even after the clean robot reaches the flag. The app also overrides MountainCar's default 200-step truncation, so the sidebar max-step value is the actual demo limit. A compact explanation appears at the end. On the deployed app, the rollout is shown as an animated GIF after the simulation finishes. This avoids dropped live frames on Streamlit Cloud.
+- The simulation keeps running until the selected step limit, so you can keep watching the attacked robot even after the clean robot reaches the flag. The app also overrides MountainCar's default 200-step truncation, so the sidebar max-step value is the actual demo limit. A compact explanation appears at the end. The app shows live panels during the run and also creates an optional GIF playback, which is more reliable on Streamlit Cloud.
 """
 )
 
@@ -102,7 +102,9 @@ with st.sidebar:
 
     max_steps = st.slider("Max demo steps", 50, 1000, 300, 10)
     st.caption("This overrides MountainCar-v0's default 200-step time limit for the demo.")
-    delay = st.slider("GIF frame delay", 0.00, 0.20, 0.03, 0.005, format="%.3f")
+    delay = st.slider("Frame delay", 0.00, 0.20, 0.03, 0.005, format="%.3f")
+    live_update_every = st.slider("Live panel update every N steps", 1, 20, 3, 1)
+    make_gif = st.checkbox("Create GIF playback after run", value=True, help="Recommended for Streamlit Cloud because rapid live frame updates may be skipped by the browser.")
     seed = st.number_input("Episode seed", value=42, min_value=0, step=1)
     run_button = st.button("Run side-by-side demo", type="primary")
 
@@ -270,7 +272,7 @@ def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640
 
 
 def make_side_by_side_frame(clean_obs: np.ndarray, attack_obs: np.ndarray, clean_done: bool, attack_done: bool) -> Image.Image:
-    """Create one combined frame for the final animated demo GIF."""
+    """Create one combined frame for the optional animated GIF playback."""
     clean_img = Image.fromarray(
         render_mountain_car_frame(
             clean_obs,
@@ -287,35 +289,32 @@ def make_side_by_side_frame(clean_obs: np.ndarray, attack_obs: np.ndarray, clean
             height=320,
         )
     )
-
     gap = 20
     header_h = 42
     combined = Image.new("RGB", (clean_img.width + attack_img.width + gap, clean_img.height + header_h), "white")
     draw = ImageDraw.Draw(combined)
     draw.text((16, 12), "EvasionRL side-by-side rollout", fill=(20, 30, 45))
-    draw.text((clean_img.width + gap + 16, 12), "Clean vs attacked observation control", fill=(20, 30, 45))
+    draw.text((clean_img.width + gap + 16, 12), "Clean vs attacked robot", fill=(20, 30, 45))
     combined.paste(clean_img, (0, header_h))
     combined.paste(attack_img, (clean_img.width + gap, header_h))
     return combined
 
 
 def frames_to_gif_bytes(frames: list[Image.Image], duration_ms: int = 80) -> bytes:
-    """Encode rollout frames as an animated GIF using PIL only."""
+    """Encode frames as GIF bytes. Kept optional so static panels always work."""
     if not frames:
         raise ValueError("No frames to encode")
     buf = io.BytesIO()
-    first, rest = frames[0], frames[1:]
-    first.save(
+    frames[0].save(
         buf,
         format="GIF",
         save_all=True,
-        append_images=rest,
+        append_images=frames[1:],
         duration=duration_ms,
         loop=0,
-        optimize=True,
+        optimize=False,
     )
     return buf.getvalue()
-
 
 def describe_stop(clean_done: bool, attack_done: bool, clean_obs: np.ndarray, attack_obs: np.ndarray, step_count: int, max_steps: int) -> str:
     clean_goal = reached_goal(clean_obs)
@@ -345,6 +344,7 @@ def describe_stop(clean_done: bool, attack_done: bool, clean_obs: np.ndarray, at
 
 if run_button:
     final_box.empty()
+    animation_box.empty()
     progress_bar = progress_box.progress(0, text="Running side-by-side simulation...")
 
     # Override Gymnasium's default MountainCar time limit.
@@ -355,6 +355,18 @@ if run_button:
 
     clean_obs, _ = env_clean.reset(seed=int(seed))
     attack_obs, _ = env_attack.reset(seed=int(seed))
+
+    # Always show initial panels immediately, so users see the two views even before the loop finishes.
+    clean_frame_box.image(
+        render_mountain_car_frame(clean_obs, "Clean robot - start"),
+        caption="Clean robot start",
+        use_container_width=True,
+    )
+    attack_frame_box.image(
+        render_mountain_car_frame(attack_obs, "Attacked robot - start"),
+        caption="Attacked robot start",
+        use_container_width=True,
+    )
 
     clean_total = 0.0
     attack_total = 0.0
@@ -379,9 +391,6 @@ if run_button:
     attack_active_steps = 0
     both_active_steps = 0
 
-    # On Streamlit Cloud, many rapid st.image updates can be batched by the browser.
-    # We therefore capture frames during the rollout and show one animated GIF at
-    # the end. This is much more reliable for deployment than live frame updates.
     rollout_frames: list[Image.Image] = []
     frame_stride = max(1, int(max_steps // 180))
 
@@ -445,7 +454,32 @@ if run_button:
             if final_attack_done and attack_done_step is None:
                 attack_done_step = step + 1
 
-        if step == 0 or step % frame_stride == 0 or final_clean_done or final_attack_done or step == max_steps - 1:
+        clean_caption = "Clean robot: finished" if final_clean_done else "Clean robot: DQN sees true [position, velocity]"
+        attack_caption = "Attacked robot: finished" if final_attack_done else "Attacked robot: DQN sees perturbed [position, velocity]"
+
+        # Static panels are still updated during the run. On Streamlit Cloud,
+        # some rapid updates may be skipped, but the panels remain visible and
+        # the optional GIF below provides reliable playback after the run.
+        should_update_live = (
+            step == 0
+            or step % int(live_update_every) == 0
+            or final_clean_done
+            or final_attack_done
+            or step == max_steps - 1
+        )
+        if should_update_live:
+            clean_frame_box.image(
+                render_mountain_car_frame(clean_obs, "Clean robot"),
+                caption=clean_caption,
+                use_container_width=True,
+            )
+            attack_frame_box.image(
+                render_mountain_car_frame(attack_obs, "Attacked robot"),
+                caption=attack_caption,
+                use_container_width=True,
+            )
+
+        if make_gif and (step == 0 or step % frame_stride == 0 or final_clean_done or final_attack_done or step == max_steps - 1):
             rollout_frames.append(make_side_by_side_frame(clean_obs, attack_obs, final_clean_done, final_attack_done))
 
         step_count = step + 1
@@ -461,15 +495,12 @@ if run_button:
         if final_clean_done and final_attack_done:
             break
 
-        # No per-frame sleep here: the deployment-friendly animation is rendered as a GIF after the rollout.
+        time.sleep(delay)
 
     progress_box.empty()
 
-    if rollout_frames:
-        gif_duration = max(30, int(delay * 1000)) if delay > 0 else 70
-        gif_bytes = frames_to_gif_bytes(rollout_frames, duration_ms=gif_duration)
-        animation_box.image(gif_bytes, caption="Animated side-by-side rollout", use_container_width=True)
-
+    # Always refresh final static panels before any GIF work. This prevents a
+    # GIF encoding/display issue from hiding the two main views.
     clean_frame_box.image(
         render_mountain_car_frame(clean_obs, "Clean robot - final"),
         caption="Clean robot final state",
@@ -480,6 +511,14 @@ if run_button:
         caption="Attacked robot final state",
         use_container_width=True,
     )
+
+    if make_gif and rollout_frames:
+        try:
+            gif_duration = max(30, int(delay * 1000)) if delay > 0 else 70
+            gif_bytes = frames_to_gif_bytes(rollout_frames, duration_ms=gif_duration)
+            animation_box.image(gif_bytes, caption="Playback animation for Streamlit Cloud", use_container_width=True)
+        except Exception as exc:
+            animation_box.warning(f"GIF playback could not be created, but the final panels and summary are still available. Details: {exc}")
 
     if last_result is None:
         st.error("No simulation steps were run.")
