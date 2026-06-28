@@ -4,8 +4,8 @@
   "seed": 42,
   "reward_shaping_used_for_training": true,
   "evaluation_env": "unshaped MountainCar-v0",
-  "mean_reward_20_episodes": -108.2,
-  "std_reward_20_episodes": 15.21380951635717,
-  "demo_ready": true,
+  "mean_reward_20_episodes": -164.85,
+  "std_reward_20_episodes": 21.204421708690855,
+  "demo_ready": false,
   "note": "For MountainCar, -200 means time-limit failure. A good demo model should usually score much higher than -200."
 }

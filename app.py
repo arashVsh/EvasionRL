@@ -10,12 +10,14 @@ simulation. Detailed timestep logs are intentionally hidden from the user-facing
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
 import streamlit as st
+from PIL import Image, ImageDraw
 from stable_baselines3 import DQN
 
 from attacks import make_adversarial_observation, predict_action_from_obs
@@ -110,8 +112,9 @@ if not MODEL_PATH.exists():
 
 @st.cache_resource
 def load_model():
-    dummy_env = gym.make(ENV_ID)
-    return DQN.load(str(MODEL_PATH), env=dummy_env)
+    # CPU-only loading is safer for Streamlit Cloud.
+    dummy_env = gym.make(ENV_ID, max_episode_steps=500)
+    return DQN.load(str(MODEL_PATH), env=dummy_env, device="cpu")
 
 
 model = load_model()
@@ -153,6 +156,116 @@ def reached_goal(obs: np.ndarray) -> bool:
     return float(obs[0]) >= GOAL_POSITION
 
 
+
+def render_mountain_car_frame(obs: np.ndarray, title: str = "", width: int = 640, height: int = 360) -> np.ndarray:
+    """Draw MountainCar without Gymnasium's pygame renderer.
+
+    Gymnasium's built-in RGB renderer depends on pygame/SDL, which can fail on
+    Streamlit Cloud. This lightweight renderer uses only PIL and NumPy, so it is
+    deployment-friendly.
+    """
+    position = float(obs[0])
+    velocity = float(obs[1])
+
+    min_x, max_x = -1.2, 0.6
+    goal_x = GOAL_POSITION
+
+    def hill_y(x: float) -> float:
+        # Same visual shape as MountainCar's classic hill: valley in the middle,
+        # right-side goal uphill. Values are normalized to [0, 1].
+        return math.sin(3.0 * x) * 0.45 + 0.55
+
+    def x_to_px(x: float) -> int:
+        return int((x - min_x) / (max_x - min_x) * (width - 1))
+
+    def y_to_px(y: float) -> int:
+        # Leave margins for labels/title.
+        top_margin = 55
+        bottom_margin = 35
+        usable = height - top_margin - bottom_margin
+        return int(top_margin + (1.0 - y) * usable)
+
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+
+    # Background bands.
+    draw.rectangle([0, 0, width, height], fill=(248, 250, 252))
+    draw.rectangle([0, height - 35, width, height], fill=(235, 240, 245))
+
+    # Title and state text.
+    draw.text((16, 12), title, fill=(20, 30, 45))
+    draw.text(
+        (16, 32),
+        f"position={position:+.3f}   velocity={velocity:+.3f}",
+        fill=(50, 60, 75),
+    )
+
+    # Hill curve.
+    points = []
+    for px in range(width):
+        x = min_x + (px / (width - 1)) * (max_x - min_x)
+        points.append((px, y_to_px(hill_y(x))))
+    draw.line(points, fill=(70, 100, 130), width=4)
+
+    # Fill under the hill.
+    polygon = points + [(width - 1, height - 35), (0, height - 35)]
+    draw.polygon(polygon, fill=(225, 232, 240))
+    draw.line(points, fill=(70, 100, 130), width=4)
+
+    # Goal flag.
+    goal_px = x_to_px(goal_x)
+    goal_py = y_to_px(hill_y(goal_x))
+    draw.line([(goal_px, goal_py), (goal_px, goal_py - 75)], fill=(30, 120, 60), width=4)
+    draw.polygon(
+        [(goal_px, goal_py - 75), (goal_px + 55, goal_py - 60), (goal_px, goal_py - 45)],
+        fill=(40, 170, 80),
+    )
+    draw.text((max(0, goal_px - 30), max(0, goal_py - 100)), "FLAG", fill=(30, 120, 60))
+
+    # Car position on hill.
+    car_x = max(min(position, max_x), min_x)
+    car_px = x_to_px(car_x)
+    car_py = y_to_px(hill_y(car_x))
+
+    # Estimate terrain angle from derivative y = sin(3x). The exact scale is
+    # visual only; it just makes the car lean with the slope.
+    slope = math.cos(3.0 * car_x)
+    angle = math.atan(0.7 * slope)
+    car_w, car_h = 48, 24
+
+    def rotate_point(dx: float, dy: float) -> tuple[int, int]:
+        ca, sa = math.cos(angle), math.sin(angle)
+        x = car_px + dx * ca - dy * sa
+        y = car_py - 12 + dx * sa + dy * ca
+        return int(x), int(y)
+
+    body = [
+        rotate_point(-car_w / 2, -car_h / 2),
+        rotate_point(car_w / 2, -car_h / 2),
+        rotate_point(car_w / 2, car_h / 2),
+        rotate_point(-car_w / 2, car_h / 2),
+    ]
+    draw.polygon(body, fill=(230, 90, 70), outline=(120, 40, 35))
+
+    # Wheels.
+    for dx in (-16, 16):
+        wx, wy = rotate_point(dx, car_h / 2 + 4)
+        draw.ellipse([wx - 6, wy - 6, wx + 6, wy + 6], fill=(35, 45, 55))
+
+    # Velocity arrow.
+    if abs(velocity) > 1e-4:
+        arrow_len = max(-45, min(45, velocity * 900))
+        draw.line([(car_px, car_py - 45), (car_px + arrow_len, car_py - 45)], fill=(30, 90, 200), width=3)
+        head_x = car_px + arrow_len
+        sign = 1 if arrow_len >= 0 else -1
+        draw.polygon(
+            [(head_x, car_py - 45), (head_x - 8 * sign, car_py - 51), (head_x - 8 * sign, car_py - 39)],
+            fill=(30, 90, 200),
+        )
+        draw.text((car_px - 32, car_py - 70), "velocity", fill=(30, 90, 200))
+
+    return np.array(img)
+
 def describe_stop(clean_done: bool, attack_done: bool, clean_obs: np.ndarray, attack_obs: np.ndarray, step_count: int, max_steps: int) -> str:
     clean_goal = reached_goal(clean_obs)
     attack_goal = reached_goal(attack_obs)
@@ -186,8 +299,8 @@ if run_button:
     # Override Gymnasium's default MountainCar time limit.
     # MountainCar-v0 normally truncates at 200 steps, which made the demo stop
     # early even when the sidebar max-step value was larger.
-    env_clean = gym.make(ENV_ID, render_mode="rgb_array", max_episode_steps=int(max_steps))
-    env_attack = gym.make(ENV_ID, render_mode="rgb_array", max_episode_steps=int(max_steps))
+    env_clean = gym.make(ENV_ID, max_episode_steps=int(max_steps))
+    env_attack = gym.make(ENV_ID, max_episode_steps=int(max_steps))
 
     clean_obs, _ = env_clean.reset(seed=int(seed))
     attack_obs, _ = env_attack.reset(seed=int(seed))
@@ -277,8 +390,16 @@ if run_button:
 
         clean_caption = "Clean robot: finished" if final_clean_done else "Clean robot: DQN sees true [position, velocity]"
         attack_caption = "Attacked robot: finished" if final_attack_done else "Attacked robot: DQN sees perturbed [position, velocity]"
-        clean_frame_box.image(env_clean.render(), caption=clean_caption, use_container_width=True)
-        attack_frame_box.image(env_attack.render(), caption=attack_caption, use_container_width=True)
+        clean_frame_box.image(
+            render_mountain_car_frame(clean_obs, "Clean robot"),
+            caption=clean_caption,
+            use_container_width=True,
+        )
+        attack_frame_box.image(
+            render_mountain_car_frame(attack_obs, "Attacked robot"),
+            caption=attack_caption,
+            use_container_width=True,
+        )
 
         step_count = step + 1
         if clean_action is not None:
