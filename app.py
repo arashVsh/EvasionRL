@@ -165,6 +165,7 @@ with view_right:
     st.markdown("### ⚠️ Attacked robot")
     attack_frame_box = st.empty()
 
+status_box = st.empty()
 animation_box = st.empty()
 progress_box = st.empty()
 final_box = st.empty()
@@ -455,6 +456,12 @@ def describe_stop(
 if run_button:
     final_box.empty()
     animation_box.empty()
+
+    status_box.info(
+        "Running the clean and attacked robots now. "
+        "The playback animation will appear below in a few moments."
+    )
+
     progress_bar = progress_box.progress(0, text="Running side-by-side simulation...")
 
     # Override Gymnasium's default MountainCar time limit.
@@ -615,7 +622,6 @@ if run_button:
                 )
             )
 
-
         step_count = step + 1
         if clean_action is not None:
             last_clean_action = clean_action
@@ -629,10 +635,17 @@ if run_button:
             text=f"Running until max-step limit... step {step_count}/{max_steps}",
         )
 
+        status_box.info(
+            f"Simulating rollout... step {step_count}/{max_steps}. "
+            "Playback will be generated after the run finishes."
+        )
+
         if final_clean_done and final_attack_done:
             break
 
     progress_box.empty()
+
+    status_box.success("Simulation finished. Preparing playback and final summary...")
 
     # Always refresh final static panels before any GIF work. This prevents a
     # GIF encoding/display issue from hiding the two main views.
@@ -651,6 +664,8 @@ if run_button:
         animation_box.markdown("## Rollout playback")
         with animation_box.container():
             render_browser_animation(rollout_frames, fps=int(animation_fps))
+
+    status_box.empty()
 
     if last_result is None:
         st.error("No simulation steps were run.")
