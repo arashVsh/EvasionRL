@@ -79,6 +79,7 @@ The robot then executes the action selected from the **modified observation**, b
 
 with st.sidebar:
     st.header("Attack controls")
+    run_button = st.button("Run side-by-side demo", type="primary")
     attack = st.selectbox("Attack type", ["none", "random", "fgsm", "pgd"], index=3)
     epsilon = st.slider("Observation perturbation ε", 0.0, 0.25, 0.050, 0.001, format="%.4f")
 
@@ -106,7 +107,7 @@ with st.sidebar:
     live_update_every = st.slider("Live panel update every N steps", 1, 20, 3, 1)
     make_gif = st.checkbox("Create GIF playback after run", value=True, help="Recommended for Streamlit Cloud because rapid live frame updates may be skipped by the browser.")
     seed = st.number_input("Episode seed", value=42, min_value=0, step=1)
-    run_button = st.button("Run side-by-side demo", type="primary")
+    
 
 if not MODEL_PATH.exists():
     st.error(f"Model not found: `{MODEL_PATH}`. Train it first with: `python train_dqn.py --timesteps 500000`")
