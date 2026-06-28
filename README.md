@@ -1,8 +1,6 @@
 # EvasionRL
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://YOUR-EVASIONRL-APP.streamlit.app)
-
-<!-- **Live demo:** https://YOUR-EVASIONRL-APP.streamlit.app -->
+**Live demo:** https://arashvsh-evasionrl-app-najahp.streamlit.app/
 
 **EvasionRL** is an interactive Streamlit demo that shows how a trained reinforcement-learning robot can be disrupted by an **observation-space evasion attack**.
 

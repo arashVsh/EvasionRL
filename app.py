@@ -357,6 +357,12 @@ if run_button:
     clean_obs, _ = env_clean.reset(seed=int(seed))
     attack_obs, _ = env_attack.reset(seed=int(seed))
 
+    # These are the observations used only for visualization.
+    # When one robot finishes, its display observation freezes.
+    # The other robot can still keep updating independently.
+    clean_display_obs = clean_obs.copy()
+    attack_display_obs = attack_obs.copy()
+
     # Always show initial panels immediately, so users see the two views even before the loop finishes.
     clean_frame_box.image(
         render_mountain_car_frame(clean_obs, "Clean robot - start"),
@@ -439,10 +445,16 @@ if run_button:
                 if first_clean_vs_attacked_diff is None:
                     first_clean_vs_attacked_diff = step
 
+        clean_stepped_this_loop = False
+        attack_stepped_this_loop = False
+
         if not final_clean_done and clean_action is not None:
             clean_next_obs, clean_reward, clean_terminated, clean_truncated, _ = env_clean.step(clean_action)
             clean_total += float(clean_reward)
             clean_obs = clean_next_obs
+            clean_display_obs = clean_obs.copy()
+            clean_stepped_this_loop = True
+
             final_clean_done = clean_terminated or clean_truncated
             if final_clean_done and clean_done_step is None:
                 clean_done_step = step + 1
@@ -451,6 +463,9 @@ if run_button:
             attack_next_obs, attack_reward, attack_terminated, attack_truncated, _ = env_attack.step(attacked_action)
             attack_total += float(attack_reward)
             attack_obs = attack_next_obs
+            attack_display_obs = attack_obs.copy()
+            attack_stepped_this_loop = True
+
             final_attack_done = attack_terminated or attack_truncated
             if final_attack_done and attack_done_step is None:
                 attack_done_step = step + 1
@@ -461,27 +476,39 @@ if run_button:
         # Static panels are still updated during the run. On Streamlit Cloud,
         # some rapid updates may be skipped, but the panels remain visible and
         # the optional GIF below provides reliable playback after the run.
-        should_update_live = (
-            step == 0
-            or step % int(live_update_every) == 0
-            or final_clean_done
-            or final_attack_done
-            or step == max_steps - 1
-        )
-        if should_update_live:
+        periodic_update = step == 0 or step % int(live_update_every) == 0 or step == max_steps - 1
+
+        should_update_clean_panel = (
+            periodic_update and not final_clean_done
+        ) or clean_stepped_this_loop or (clean_done_step == step + 1)
+
+        should_update_attack_panel = (
+            periodic_update and not final_attack_done
+        ) or attack_stepped_this_loop or (attack_done_step == step + 1)
+
+        if should_update_clean_panel:
             clean_frame_box.image(
-                render_mountain_car_frame(clean_obs, "Clean robot"),
+                render_mountain_car_frame(clean_display_obs, "Clean robot"),
                 caption=clean_caption,
                 use_container_width=True,
             )
+
+        if should_update_attack_panel:
             attack_frame_box.image(
-                render_mountain_car_frame(attack_obs, "Attacked robot"),
+                render_mountain_car_frame(attack_display_obs, "Attacked robot"),
                 caption=attack_caption,
                 use_container_width=True,
             )
 
         if make_gif and (step == 0 or step % frame_stride == 0 or final_clean_done or final_attack_done or step == max_steps - 1):
-            rollout_frames.append(make_side_by_side_frame(clean_obs, attack_obs, final_clean_done, final_attack_done))
+            rollout_frames.append(
+            make_side_by_side_frame(
+                clean_display_obs,
+                attack_display_obs,
+                final_clean_done,
+                final_attack_done,
+            )
+        )
 
         step_count = step + 1
         if clean_action is not None:
@@ -503,12 +530,12 @@ if run_button:
     # Always refresh final static panels before any GIF work. This prevents a
     # GIF encoding/display issue from hiding the two main views.
     clean_frame_box.image(
-        render_mountain_car_frame(clean_obs, "Clean robot - final"),
+        render_mountain_car_frame(clean_display_obs, "Clean robot - final"),
         caption="Clean robot final state",
         use_container_width=True,
     )
     attack_frame_box.image(
-        render_mountain_car_frame(attack_obs, "Attacked robot - final"),
+        render_mountain_car_frame(attack_display_obs, "Attacked robot - final"),
         caption="Attacked robot final state",
         use_container_width=True,
     )
