@@ -14,7 +14,6 @@ import base64
 import streamlit.components.v1 as components
 import json
 import math
-import time
 from pathlib import Path
 
 import gymnasium as gym
@@ -30,6 +29,7 @@ SUMMARY_PATH = MODEL_PATH.with_suffix(".training_summary.json")
 ENV_ID = "MountainCar-v0"
 ACTION_NAMES = {0: "push left", 1: "no push", 2: "push right"}
 GOAL_POSITION = 0.5
+
 
 st.set_page_config(page_title="EvasionRL", page_icon="🤖", layout="wide")
 st.title("🤖 EvasionRL")
@@ -75,9 +75,46 @@ What the DQN sees:    [-0.495,  0.050]
 The robot then executes the action selected from the **modified observation**, but the environment physics still update the real car state.
 """)
 
+if "simulation_running" not in st.session_state:
+    st.session_state.simulation_running = False
+
+if "start_simulation" not in st.session_state:
+    st.session_state.start_simulation = False
+
+if "rollout_frames" not in st.session_state:
+    st.session_state.rollout_frames = []
+
+if "final_summary_markdown" not in st.session_state:
+    st.session_state.final_summary_markdown = ""
+
+if "final_clean_obs" not in st.session_state:
+    st.session_state.final_clean_obs = None
+
+if "final_attack_obs" not in st.session_state:
+    st.session_state.final_attack_obs = None
+
+
+def request_simulation_run():
+    st.session_state.simulation_running = True
+    st.session_state.start_simulation = True
+    st.session_state.rollout_frames = []
+    st.session_state.final_summary_markdown = ""
+    st.session_state.final_clean_obs = None
+    st.session_state.final_attack_obs = None
+
+
 with st.sidebar:
     st.header("Attack controls")
-    run_button = st.button("Run side-by-side demo", type="primary")
+    run_button = st.button(
+        (
+            "Running..."
+            if st.session_state.simulation_running
+            else "Run side-by-side demo"
+        ),
+        type="primary",
+        disabled=st.session_state.simulation_running,
+        on_click=request_simulation_run,
+    )
     attack = st.selectbox("Attack type", ["none", "random", "fgsm", "pgd"], index=3)
     epsilon = st.slider(
         "Observation perturbation ε", 0.0, 0.25, 0.050, 0.001, format="%.4f"
@@ -156,6 +193,7 @@ else:
         "`python train_dqn.py --timesteps 500000`."
     )
 
+st.markdown('<div id="rollout-view"></div>', unsafe_allow_html=True)
 view_left, view_right = st.columns(2)
 with view_left:
     st.markdown("### ✅ Clean robot")
@@ -453,7 +491,21 @@ def describe_stop(
     return "The demo stopped."
 
 
-if run_button:
+if st.session_state.start_simulation:
+    st.session_state.start_simulation = False
+
+    components.html(
+        """
+        <script>
+            const target = window.parent.document.getElementById("rollout-view");
+            if (target) {
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+        </script>
+        """,
+        height=0,
+    )
+
     final_box.empty()
     animation_box.empty()
 
@@ -664,6 +716,8 @@ if run_button:
         animation_box.markdown("## Rollout playback")
         with animation_box.container():
             render_browser_animation(rollout_frames, fps=int(animation_fps))
+        # Re-enable the Run button as soon as playback appears
+        st.session_state.simulation_running = False
 
     status_box.empty()
 
@@ -693,46 +747,82 @@ if run_button:
         else "Attack did not clearly disrupt success in this run."
     )
 
-    final_box.markdown(f"""
-## Final summary
+    summary_markdown = f"""
+    ## Final summary
 
-**Outcome:** {outcome}
+    **Outcome:** {outcome}
 
-**Why did the simulation stop?** {stop_text}
+    **Why did the simulation stop?** {stop_text}
 
-| Metric | Clean robot | Attacked robot |
-|---|---:|---:|
-| Reached flag | {"Yes" if clean_success else "No"} | {"Yes" if attack_success else "No"} |
-| Final position | `{float(clean_obs[0]):.3f}` | `{float(attack_obs[0]):.3f}` |
-| Final velocity | `{float(clean_obs[1]):.3f}` | `{float(attack_obs[1]):.3f}` |
-| Total return | `{clean_total:.0f}` | `{attack_total:.0f}` |
-| Steps shown | `{step_count}` | `{step_count}` |
-| Episode finished at step | `{clean_done_step if clean_done_step is not None else "not finished"}` | `{attack_done_step if attack_done_step is not None else "not finished"}` |
-| Last action | `{ACTION_NAMES[int(last_clean_action)]}` | `{ACTION_NAMES[int(last_attacked_action)]}` |
+    | Metric | Clean robot | Attacked robot |
+    |---|---:|---:|
+    | Reached flag | {"Yes" if clean_success else "No"} | {"Yes" if attack_success else "No"} |
+    | Final position | `{float(clean_obs[0]):.3f}` | `{float(attack_obs[0]):.3f}` |
+    | Final velocity | `{float(clean_obs[1]):.3f}` | `{float(attack_obs[1]):.3f}` |
+    | Total return | `{clean_total:.0f}` | `{attack_total:.0f}` |
+    | Steps shown | `{step_count}` | `{step_count}` |
+    | Episode finished at step | `{clean_done_step if clean_done_step is not None else "not finished"}` | `{attack_done_step if attack_done_step is not None else "not finished"}` |
+    | Last action | `{ACTION_NAMES[int(last_clean_action)]}` | `{ACTION_NAMES[int(last_attacked_action)]}` |
 
-### Attack summary
+    ### Attack summary
 
-| Item | Value |
-|---|---:|
-| Attack type | `{attack}` |
-| Epsilon | `{epsilon:.3f}` |
-| Objective | `{objective}` |
-| Last true attacked observation | `[{float(last_result.clean_obs[0]):.3f}, {float(last_result.clean_obs[1]):.3f}]` |
-| Last observation seen by DQN | `[{float(last_result.adv_obs[0]):.3f}, {float(last_result.adv_obs[1]):.3f}]` |
-| Last perturbation | `[{float(last_result.perturbation[0]):+.3f}, {float(last_result.perturbation[1]):+.3f}]` |
-| Last L∞ perturbation size | `{perturb_linf:.3f}` |
-| Action without attack on attacked robot | `{ACTION_NAMES[int(last_attacked_action_without_attack)]}` |
-| Action after attack on attacked robot | `{ACTION_NAMES[int(last_attacked_action)]}` |
-| Attack changed attacked robot's decision | `{100 * attack_decision_change_rate:.1f}%` of steps |
-| Clean-vs-attacked action difference | `{100 * clean_vs_attacked_diff_rate:.1f}%` of steps |
-| First attack-caused decision change | `{first_attack_decision_change if first_attack_decision_change is not None else "none"}` |
-| First clean-vs-attacked action difference | `{first_clean_vs_attacked_diff if first_clean_vs_attacked_diff is not None else "none"}` |
+    | Item | Value |
+    |---|---:|
+    | Attack type | `{attack}` |
+    | Epsilon | `{epsilon:.3f}` |
+    | Objective | `{objective}` |
+    | Last true attacked observation | `[{float(last_result.clean_obs[0]):.3f}, {float(last_result.clean_obs[1]):.3f}]` |
+    | Last observation seen by DQN | `[{float(last_result.adv_obs[0]):.3f}, {float(last_result.adv_obs[1]):.3f}]` |
+    | Last perturbation | `[{float(last_result.perturbation[0]):+.3f}, {float(last_result.perturbation[1]):+.3f}]` |
+    | Last L∞ perturbation size | `{perturb_linf:.3f}` |
+    | Action without attack on attacked robot | `{ACTION_NAMES[int(last_attacked_action_without_attack)]}` |
+    | Action after attack on attacked robot | `{ACTION_NAMES[int(last_attacked_action)]}` |
+    | Attack changed attacked robot's decision | `{100 * attack_decision_change_rate:.1f}%` of steps |
+    | Clean-vs-attacked action difference | `{100 * clean_vs_attacked_diff_rate:.1f}%` of steps |
+    | First attack-caused decision change | `{first_attack_decision_change if first_attack_decision_change is not None else "none"}` |
+    | First clean-vs-attacked action difference | `{first_clean_vs_attacked_diff if first_clean_vs_attacked_diff is not None else "none"}` |
 
-The demo uses the sidebar max-step value as the actual environment time limit. If one robot reaches the flag early, its view freezes, but the other robot continues until it also reaches the flag or the selected max-step limit is reached.
+    The demo uses the sidebar max-step value as the actual environment time limit. If one robot reaches the flag early, its view freezes, but the other robot continues until it also reaches the flag or the selected max-step limit is reached.
 
-In MountainCar, the reward is usually `-1` per active environment step until the flag is reached. A shorter successful run can therefore have a less negative return. The important visual result is whether the clean robot reaches the flag while the attacked robot remains far away.
-""")
-else:
+    In MountainCar, the reward is usually `-1` per active environment step until the flag is reached. A shorter successful run can therefore have a less negative return. The important visual result is whether the clean robot reaches the flag while the attacked robot remains far away.
+    """
+
+    st.session_state.rollout_frames = rollout_frames
+    st.session_state.final_summary_markdown = summary_markdown
+    st.session_state.final_clean_obs = clean_display_obs.copy()
+    st.session_state.final_attack_obs = attack_display_obs.copy()
+
+    st.session_state.simulation_running = False
+    st.rerun()
+
+
+if st.session_state.rollout_frames:
+    clean_frame_box.image(
+        render_mountain_car_frame(
+            st.session_state.final_clean_obs, "Clean robot - final"
+        ),
+        caption="Clean robot final state",
+        width="stretch",
+    )
+
+    attack_frame_box.image(
+        render_mountain_car_frame(
+            st.session_state.final_attack_obs, "Attacked robot - final"
+        ),
+        caption="Attacked robot final state",
+        width="stretch",
+    )
+
+    animation_box.markdown("## Rollout playback")
+    with animation_box.container():
+        render_browser_animation(
+            st.session_state.rollout_frames,
+            fps=int(animation_fps),
+        )
+
+    final_box.markdown(st.session_state.final_summary_markdown)
+
+elif not st.session_state.start_simulation:
     st.info(
         "Choose attack settings in the sidebar, then click **Run side-by-side demo**."
     )
